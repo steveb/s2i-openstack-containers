@@ -1,2 +1,2 @@
-master upper-constraints https://opendev.org/openstack/requirements.git master b8de3b00af9dd2ffc1a85bf836cf3c7ee9e8bac7
-master swift https://opendev.org/openstack/swift.git master 3064444bf433dfb7ade3d91130b58f7bceae9add
+master upper-constraints https://opendev.org/openstack/requirements.git master cd49ff24a5571a24fad692ffa4e7331e14841c56
+master swift https://opendev.org/openstack/swift.git master 5e4b45fc17a59d4edd7079c0da3fe028175def45
