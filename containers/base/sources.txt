@@ -1,1 +1,1 @@
-master upper-constraints https://opendev.org/openstack/requirements.git master a56b052dc4bd64f4a1fa035a28f3358ad79caefc
+master upper-constraints https://opendev.org/openstack/requirements.git master 4e7932c879b889553e5629a4884ed98b0d2786a6
