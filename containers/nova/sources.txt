@@ -1,2 +1,2 @@
-master upper-constraints https://opendev.org/openstack/requirements.git master b8de3b00af9dd2ffc1a85bf836cf3c7ee9e8bac7
-master nova https://opendev.org/openstack/nova.git master 2a745c7e15376b8c4b9581e9f149bb02ef596ebc
+master upper-constraints https://opendev.org/openstack/requirements.git master 15752394b49ee5c491257a6bc0e2cfd773971a25
+master nova https://opendev.org/openstack/nova.git master ccb51d6f2ef740d092f75dda6d44812d2c5d2b9c

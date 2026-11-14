@@ -1,2 +1,2 @@
-master upper-constraints https://opendev.org/openstack/requirements.git master b8de3b00af9dd2ffc1a85bf836cf3c7ee9e8bac7
-master glance https://opendev.org/openstack/glance.git master 4f7a19df0cdad9cb50e92bc8a69be13543c4a3b5
+master upper-constraints https://opendev.org/openstack/requirements.git master 15752394b49ee5c491257a6bc0e2cfd773971a25
+master glance https://opendev.org/openstack/glance.git master f74e568e0a46d6b982bfe6bdb0783cd43c6e28c0

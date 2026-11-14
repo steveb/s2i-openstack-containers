@@ -1,7 +1,7 @@
 crudini==0.9.6
 dumb-init==1.2.5.post1
 iniparse==0.5
-pbr==7.0.3
+pbr==7.1.3
 six==1.17.0
 
 # The following packages are considered to be unsafe in a requirements file:
