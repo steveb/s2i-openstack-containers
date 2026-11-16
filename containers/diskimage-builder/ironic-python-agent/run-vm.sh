@@ -26,8 +26,37 @@ OUT_DIR=${OUT_DIR:-${BUILD_DIR}/vm-out}
 VM_CPUS=${VM_CPUS:-4}
 VM_MEMORY=${VM_MEMORY:-4096}
 VM_TIMEOUT=${VM_TIMEOUT:-5400}
+QEMU_BIN=${QEMU_BIN:-}
 
 log() { echo "=== $* ==="; }
+
+dump_console() {
+    if [[ -f ${CONSOLE_LOG} ]]; then
+        tail -n 500 "${CONSOLE_LOG}" >&2
+    fi
+}
+
+# EL packages install the system emulator as /usr/libexec/qemu-kvm, Fedora
+# style packages provide qemu-system-x86_64 on PATH. Accept either.
+if [[ -z ${QEMU_BIN} ]]; then
+    for candidate in qemu-system-x86_64 /usr/libexec/qemu-kvm qemu-kvm; do
+        if [[ ${candidate} == /* ]]; then
+            if [[ -x ${candidate} ]]; then
+                QEMU_BIN=${candidate}
+                break
+            fi
+        elif command -v "${candidate}" >/dev/null 2>&1; then
+            QEMU_BIN=${candidate}
+            break
+        fi
+    done
+fi
+if [[ -z ${QEMU_BIN} ]]; then
+    echo "ERROR: no QEMU system emulator found (is qemu-kvm installed?)" >&2
+    ls -l /usr/libexec/qemu-kvm /usr/bin/qemu-kvm /usr/bin/qemu-system-x86_64 2>&1 >&2 || true
+    rpm -qa 'qemu*' >&2 || true
+    exit 1
+fi
 
 # Size the disks from their contents: DIB extracts the os_source tarball and
 # copies the wheels into the chroot, then writes the initramfs and kernel.
@@ -53,9 +82,9 @@ else
     cpu=max
 fi
 
-log "Booting build appliance (${VM_CPUS} vCPU, ${VM_MEMORY}MB, ${accel})"
+log "Booting build appliance (${VM_CPUS} vCPU, ${VM_MEMORY}MB, ${accel}, ${QEMU_BIN})"
 set +e
-timeout "${VM_TIMEOUT}" qemu-system-x86_64 \
+timeout "${VM_TIMEOUT}" "${QEMU_BIN}" \
     -M q35 \
     -accel "${accel}" \
     -cpu "${cpu}" \
@@ -75,7 +104,7 @@ set -e
 
 if [[ ${rc} -ne 0 ]]; then
     echo "ERROR: QEMU exited with status ${rc} (console log: ${CONSOLE_LOG})" >&2
-    tail -n 500 "${CONSOLE_LOG}" >&2 || true
+    dump_console
     exit 1
 fi
 
@@ -87,14 +116,14 @@ rm -rf "${OUT_DIR}"
 mkdir -p "${OUT_DIR}"
 if ! debugfs -R "rdump /out ${OUT_DIR}" "${OUT_IMG}" >/dev/null; then
     echo "ERROR: unable to extract the build output from ${OUT_IMG}" >&2
-    tail -n 500 "${CONSOLE_LOG}" >&2 || true
+    dump_console
     exit 1
 fi
 
 status=$(cat "${OUT_DIR}/status" 2>/dev/null || echo "missing")
 if [[ "${status}" != "0" ]]; then
     echo "ERROR: in-VM build failed (status: ${status})" >&2
-    tail -n 500 "${CONSOLE_LOG}" >&2 || true
+    dump_console
     exit 1
 fi
 
