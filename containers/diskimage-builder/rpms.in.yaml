@@ -77,6 +77,7 @@ packages:
   - python3-policycoreutils
   - python3-pyyaml
   - qemu-img
+  - qemu-kvm
   - rng-tools
   - rsync
   - selinux-policy

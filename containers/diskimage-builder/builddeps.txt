@@ -21,6 +21,10 @@ yum-utils
 
 guestfs-tools
 
+# Boots the diskimage-builder appliance VM that runs the IPA image build.
+# TCG is used because container builds have no /dev/kvm.
+qemu-kvm
+
 # dosfstools
 # gdisk
 # kpartx
