@@ -13,6 +13,11 @@ dnf
 yum
 yum-utils
 
+# Collects the ironic-python-agent os_source RPMs into the local repository
+# that the in-VM diskimage-builder build installs from.
+createrepo_c
+dnf-plugins-core
+
 # diskimage-builder dependencies not required as the following steps are avoided:
 # - image extraction
 # - partitioning
@@ -20,6 +25,10 @@ yum-utils
 # - package installation
 
 guestfs-tools
+
+# Boots the diskimage-builder appliance VM that runs the IPA image build.
+# TCG is used because container builds have no /dev/kvm.
+qemu-kvm
 
 # dosfstools
 # gdisk

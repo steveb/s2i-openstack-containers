@@ -1,0 +1,28 @@
+# Package dependencies for running diskimage-builder inside the appliance.
+#
+# These are installed in the build appliance only (the guest stage) and are
+# not part of the produced qcow2. Most of the block device tooling is
+# already part of the image inventory in bindeps.txt (lvm2, xfsprogs,
+# util-linux, e2fsprogs, kmod, gdisk); this file adds what is only needed
+# to create, partition, format and convert the image.
+
+binutils
+bzip2
+curl
+dnf
+dnf-plugins-core
+dosfstools
+e2fsprogs
+findutils
+gzip
+kpartx
+lvm2
+procps-ng
+qemu-img
+qemu-kvm
+sudo
+tar
+util-linux
+xfsprogs
+yum
+yum-utils

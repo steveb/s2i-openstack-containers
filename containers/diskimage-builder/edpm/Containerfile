@@ -1,0 +1,304 @@
+ARG BASE_IMAGE=localhost/openstack/openstack-base:latest
+
+# RPM-only image: provides the filesystem content used as source data
+# for building edpm-hardened-uefi qcow2 images.
+FROM ${BASE_IMAGE} as os_source
+
+LABEL summary="EDPM OS image content" \
+      io.k8s.description="Container image providing filesystem content for edpm-hardened-uefi qcow2 image builds"
+
+# dnf is needed for the package installs below and is part of the image so
+# that diskimage-builder can install packages inside the chroot.
+RUN microdnf -y install dnf && microdnf clean all
+
+# Swap packages listed in swapdeps.txt (format: old-package new-package)
+# Run before bindeps.txt installs so that swapped-in packages are available
+# as dependencies for the main package set.
+COPY edpm/swapdeps.txt /tmp/swapdeps.txt
+RUN while IFS= read -r line; do \
+      line="${line%%#*}"; \
+      [ -z "${line// /}" ] && continue; \
+      read -r old new <<< "${line}"; \
+      echo "Swapping ${old} -> ${new}"; \
+      dnf -y swap ${old} ${new}; \
+    done < /tmp/swapdeps.txt && \
+    rm /tmp/swapdeps.txt
+
+COPY edpm/bindeps.txt /tmp/bindeps.txt
+# The dnf cache is not needed after this: diskimage-builder uses its own
+# cache directory and the local repository built below.
+RUN pkgs=$(cat /tmp/bindeps.txt | grep -v '^#' | grep -v '^$' | tr '\n' ' ') && \
+    if [ -n "${pkgs}" ]; then dnf -y install ${pkgs}; fi && \
+    dnf clean all
+
+# Collect the RPMs behind the pre-installed package set into a local
+# repository that is shipped inside the os_source tarball. The image keeps
+# the packages installed above; the repository only exists so that package
+# requests made by diskimage-builder elements inside the build appliance can
+# be resolved offline instead of failing an "already installed" assertion.
+#
+# --alldeps pulls the whole dependency closure, including dependencies that
+# are already installed, so the repository can satisfy element requests for
+# packages that bindeps.txt only pulls in transitively.
+RUN microdnf -y install dnf-plugins-core createrepo_c && \
+    pkgs=$(cat /tmp/bindeps.txt | grep -v '^#' | grep -v '^$' | tr '\n' ' ') && \
+    dnf -y download --resolve --alldeps --destdir=/var/cache/edpm-repo ${pkgs} && \
+    createrepo_c --quiet /var/cache/edpm-repo && \
+    du -sh /var/cache/edpm-repo && \
+    dnf -y remove --setopt=clean_requirements_on_remove=False \
+      dnf-plugins-core createrepo_c && \
+    dnf clean all && \
+    rm /tmp/bindeps.txt
+
+# Manually copy the kernel and create a placeholder initramfs in /boot/.
+# kernel-install fails in container builds because dracut cannot copy xattrs
+# on overlayfs. DIB's select_boot_kernel_initrd only needs /boot/vmlinuz-*
+# and /boot/initramfs-*.img to exist, and the dracut-regenerate element
+# rebuilds the initramfs inside the VM once the image is assembled.
+RUN for kver in /usr/lib/modules/*/vmlinuz; do \
+      kver=$(basename $(dirname "$kver")); \
+      cp /usr/lib/modules/${kver}/vmlinuz /boot/vmlinuz-${kver}; \
+      touch /boot/initramfs-${kver}.img; \
+    done && \
+    ls /boot/vmlinuz-* > /dev/null 2>&1 || { echo "FATAL: no /boot/vmlinuz-* found"; exit 1; } && \
+    ls /boot/initramfs-*.img > /dev/null 2>&1 || { echo "FATAL: no /boot/initramfs-*.img found"; exit 1; }
+
+# Create empty mount-point directories so they exist in the tarball
+# even though their contents are excluded. DIB requires these as
+# bind-mount targets when building the chroot (e.g. proc, sys, dev).
+RUN for d in /tmp /var /proc /sys /dev /run /media /mnt; do \
+    mkdir -p "$d"; \
+done
+
+# --- Build stage ---
+FROM ${BASE_IMAGE} AS build
+
+# Copy constraints file and all source repos into the build stage
+ARG CONSTRAINTS_FILE=requirements.lock
+COPY ${CONSTRAINTS_FILE} /deps-upper-constraints.txt
+COPY sources.txt /source-versions/project.txt
+COPY src/ /src/
+
+# We can force build from source of all packages optionally
+ARG PIP_NO_BINARY=""
+ENV PIP_NO_BINARY=${PIP_NO_BINARY}
+
+COPY builddeps.txt /tmp/builddeps.txt
+RUN pkgs=$(cat /tmp/builddeps.txt | grep -v '^#' | grep -v '^$' | tr '\n' ' ') && \
+    if [ -n "${pkgs}" ]; then microdnf -y install ${pkgs} && microdnf clean all; fi
+
+COPY pythonbuilddeps.txt /tmp/pythonbuilddeps.txt
+RUN pkgs=$(cat /tmp/pythonbuilddeps.txt | grep -v '^#' | grep -v '^$' | tr '\n' ' ') && \
+    if [ -n "${pkgs}" ]; then pip3 install --no-cache-dir -c /deps-upper-constraints.txt ${pkgs}; fi && \
+    rm /tmp/pythonbuilddeps.txt
+
+COPY edpm/pythondeps.txt /tmp/pythondeps.txt
+
+# Generate a filtered constraints file that excludes packages we build from source.
+RUN cp /deps-upper-constraints.txt /tmp/build-constraints.txt && \
+    for src_dir in /src/*/ /src/overrides/*/; do \
+      if [ -d "${src_dir}" ] && [ -f "${src_dir}/setup.cfg" ]; then \
+        pkg_name=$(grep -m1 '^name' "${src_dir}/setup.cfg" | sed 's/.*=\s*//'); \
+        sed -i "/^${pkg_name}[=!<>]/Id" /tmp/build-constraints.txt; \
+      fi; \
+    done
+
+# First build the wheels for the packages themselves
+ARG SOURCE_VERSION_STREAM=master
+RUN for pkg in /src/*/ /src/overrides/*/; do \
+      if [ -d "${pkg}" ] && [ -f "${pkg}/setup.cfg" -o -f "${pkg}/setup.py" -o -f "${pkg}/pyproject.toml" ]; then \
+        source_name=$(basename "${pkg%/}"); \
+        source_version=$(awk -v stream="${SOURCE_VERSION_STREAM}" \
+          -v name="${source_name}" \
+          '$1 == stream && $2 == name { print $6; exit }' \
+          /source-versions/*.txt); \
+        PBR_VERSION="${source_version}" pip3 wheel --no-cache-dir --no-deps \
+          --no-build-isolation --wheel-dir=/wheels/pkgs "${pkg}"; \
+      fi; \
+    done
+
+# Second, build the wheels for the dependencies and place them in a different directory.
+# Include any extra packages from pythondeps.txt.
+RUN pip3 wheel --no-cache-dir --no-deps \
+      --find-links=/wheels/pkgs \
+      --wheel-dir=/wheels/deps \
+      -r /deps-upper-constraints.txt \
+      -r /tmp/pythondeps.txt
+
+RUN for src_dir in /src/*/ /src/overrides/*/; do \
+      if [ -d "${src_dir}" ]; then \
+        if [ -f "${src_dir}/setup.cfg" ]; then \
+            pkg_name=$(grep -m1 '^name' "${src_dir}/setup.cfg" | sed 's/.*=\s*//'); \
+            commit=$(git -C "${src_dir}" rev-parse HEAD 2>/dev/null || echo "unknown"); \
+            version=$(ls /wheels/pkgs/${pkg_name//-/_}-*.whl 2>/dev/null | head -1 | sed 's/.*-\([0-9][^-]*\)-.*/\1/' || echo "unknown"); \
+            echo "${pkg_name},${commit},${version}"; \
+        elif [ -d "${src_dir}/.git" ]; then \
+            pkg_name=$(basename ${src_dir}); \
+            commit=$(git -C "${src_dir}" rev-parse HEAD 2>/dev/null || echo "unknown"); \
+            version=$(git -C "${src_dir}" describe --tags --exact-match 2>/dev/null || echo "unknown"); \
+            echo "${pkg_name},${commit},${version}"; \
+        fi; \
+      fi; \
+    done > /source-built-packages.txt
+
+ENV PIP_NO_BINARY=""
+# Install wheels for diskimage-builder invocation
+RUN pip3 install --no-cache-dir --prefix=/usr \
+      -c /tmp/build-constraints.txt \
+      --find-links=/wheels/pkgs \
+      --find-links=/wheels/deps \
+      /wheels/pkgs/*.whl \
+      -r /tmp/pythondeps.txt && \
+    rm /tmp/pythondeps.txt
+
+# Create a tarball of the os_source filesystem, excluding paths that are
+# not meaningful for a disk image (container metadata, mount points,
+# transient runtime state, and build artifacts).
+#
+# /etc/fstab is excluded because a container does not have one that applies
+# to a disk image, and the block device configuration generates the correct
+# one for the hardened partition layout.
+#
+# The local RPM repository is excluded by the /var/cache rule and appended
+# afterwards at its normal path, so that diskimage-builder sees it inside
+# the chroot while the rest of the dnf cache stays out of the image.
+ENV DIB_TARBALL_PATH=/build/os_source.tar
+RUN --mount=from=os_source,src=/,dst=/os_source \
+    mkdir -p /build && \
+    tar cf ${DIB_TARBALL_PATH} \
+      --exclude='./dev/*' \
+      --exclude='./proc/*' \
+      --exclude='./sys/*' \
+      --exclude='./run/*' \
+      --exclude='./tmp/*' \
+      --exclude='./var/cache/*' \
+      --exclude='./var/tmp/*' \
+      --exclude='./etc/fstab' \
+      --xattrs --xattrs-include='*' --xattrs-exclude='security.selinux' \
+      -C /os_source . && \
+    tar rf ${DIB_TARBALL_PATH} \
+      --transform='s|^\.|var/cache/edpm-repo|' \
+      -C /os_source/var/cache/edpm-repo .
+
+# --- Build appliance stage ---
+# A bootable root filesystem containing diskimage-builder and
+# edpm-image-builder. It is packed into a cpio initramfs and booted by
+# qemu-system-x86_64 in the runner stage below, which gives DIB a real
+# kernel, loop devices, device mapper and writable pseudo-filesystems.
+FROM os_source AS guest
+
+# Install the builder tooling offline from the wheels built above, so the
+# appliance never needs a package repository at run time. The package
+# inventory of the produced image is still the frozen os_source tarball plus
+# bindeps.txt; this only adds build tooling to the appliance.
+COPY --from=build /wheels /wheels
+COPY --from=build /tmp/build-constraints.txt /tmp/build-constraints.txt
+COPY edpm/pythondeps.txt /tmp/pythondeps.txt
+RUN pip3 install --no-cache-dir --prefix=/usr \
+      -c /tmp/build-constraints.txt \
+      --find-links=/wheels/pkgs \
+      --find-links=/wheels/deps \
+      /wheels/pkgs/*.whl \
+      -r /tmp/pythondeps.txt && \
+    rm -rf /wheels /tmp/pythondeps.txt /tmp/build-constraints.txt
+
+# Tooling that is only needed by the appliance to create the partitioned
+# qcow2 (partition table, filesystem and image conversion tools). It is
+# installed here rather than in the os_source stage so that it does not end
+# up in the produced image.
+COPY edpm/builddeps.txt /tmp/builddeps.txt
+RUN pkgs=$(cat /tmp/builddeps.txt | grep -v '^#' | grep -v '^$' | tr '\n' ' ') && \
+    if [ -n "${pkgs}" ]; then dnf -y install ${pkgs}; fi && \
+    dnf clean all && \
+    rm /tmp/builddeps.txt
+
+# The appliance boots a bare initramfs with devtmpfs and no udev daemon (see
+# guest/init). LVM defaults to relying on udev rules to create the
+# /dev/<vg>/<lv> symlinks, so lvcreate fails while clearing the new thin pool:
+#   /dev/vg/lvol0: not found: device not cleared
+#   Aborting. Failed to wipe start of new LV.
+# Disabling udev integration makes LVM fall back to creating the device nodes
+# and symlinks itself (see _init_udev_fallback() in lvm2). Both keys are
+# commented out in the default lvm.conf, hence the optional leading '#'.
+# The produced image keeps the os_source /etc/lvm/lvm.conf, where udev is
+# present at run time, so this only affects the build appliance.
+RUN conf=/etc/lvm/lvm.conf && \
+    sed -ri 's/^[[:space:]]*#?[[:space:]]*(udev_sync|udev_rules)[[:space:]]*=.*/    \1 = 0/' "${conf}" && \
+    grep -Eq '^[[:space:]]*udev_sync[[:space:]]*=[[:space:]]*0' "${conf}" && \
+    grep -Eq '^[[:space:]]*udev_rules[[:space:]]*=[[:space:]]*0' "${conf}"
+
+# Custom elements and the image definition that /init builds. The elements
+# from edpm-image-builder are installed with its wheel and are added to
+# ELEMENTS_PATH in guest/edpm-builder.env.
+COPY edpm/elements/ /elements/
+COPY edpm/edpm-s2i.yaml /images/edpm-s2i.yaml
+
+# /init runs as PID 1 in the VM and sources /etc/edpm-builder.env
+COPY edpm/guest/init /init
+COPY edpm/guest/edpm-builder.env /etc/edpm-builder.env
+RUN chmod 0755 /init
+
+# Pack the appliance filesystem into an initramfs the kernel can boot
+# directly. -xdev keeps the pseudo-filesystem mounts out of the archive
+# while retaining their (empty) mount point directories; /build, /tmp and
+# the package caches are build-time state. /tmp is recreated by /init.
+RUN mkdir -p /build && \
+    kernel="$(ls -1 /boot/vmlinuz-* | head -n1)" && \
+    cp "${kernel}" /build/edpm-builder.kernel && \
+    cd / && \
+    find . -xdev -path ./build -prune -o \
+      ! \( -path './tmp/*' -o -path './var/cache/*' \
+           -o -path './var/tmp/*' \) -print0 | \
+    cpio --null -o -H newc --owner=0:0 --reproducible 2>/dev/null | \
+    gzip -1 > /build/edpm-builder.initramfs && \
+    ls -lh /build/edpm-builder.kernel /build/edpm-builder.initramfs
+
+# --- VM build stage ---
+# Boot the appliance and build the image definition it was given inside it.
+# The resulting qcow2 is left in /build for the packaging stage.
+FROM build AS runner
+
+WORKDIR /
+COPY --from=guest /build/edpm-builder.kernel /build/edpm-builder.kernel
+COPY --from=guest /build/edpm-builder.initramfs /build/edpm-builder.initramfs
+
+# Build inputs attached to the VM as a read-only virtio disk. These are kept
+# out of the appliance initramfs so that it fits comfortably in guest RAM.
+COPY --from=build /build/os_source.tar /vmdata/os_source.tar
+
+COPY run-vm.sh /usr/local/bin/run-vm.sh
+ARG VM_CPUS=4
+ARG VM_MEMORY=8192
+ARG VM_TIMEOUT=10800
+# The guest builds and converts a 7GiB image on the output disk, so it needs
+# considerably more room than run-vm.sh's data-disk based default.
+ARG VM_OUT_KB=16777216
+ENV VM_CPUS=${VM_CPUS} \
+    VM_MEMORY=${VM_MEMORY} \
+    VM_TIMEOUT=${VM_TIMEOUT} \
+    VM_OUT_KB=${VM_OUT_KB} \
+    VM_ARTIFACTS="edpm-hardened-uefi.qcow2 edpm-hardened-uefi.qcow2.sha256"
+RUN chmod 0755 /usr/local/bin/run-vm.sh && \
+    VM_KERNEL=/build/edpm-builder.kernel \
+    VM_INITRAMFS=/build/edpm-builder.initramfs \
+    /usr/local/bin/run-vm.sh
+
+# --- Packaging stage: fetch from the VM build and add copy-out script ---
+FROM ${BASE_IMAGE}
+
+WORKDIR /
+COPY copy_out.sh .
+
+ARG IMAGE_NAME=edpm-hardened-uefi
+ARG IMAGE_FILE=${IMAGE_NAME}.qcow2
+ARG CHECKSUM_FILE=${IMAGE_FILE}.sha256
+ENV SRC_DIR=/build
+ENV DEST_DIR=/target
+ENV CHECKSUM_FILE=${CHECKSUM_FILE}
+
+RUN mkdir -p /build
+COPY --from=runner /build/${IMAGE_FILE} ${SRC_DIR}/
+WORKDIR ${SRC_DIR}
+RUN sha256sum ${IMAGE_FILE} > ${CHECKSUM_FILE}
+
+CMD ["/copy_out.sh"]

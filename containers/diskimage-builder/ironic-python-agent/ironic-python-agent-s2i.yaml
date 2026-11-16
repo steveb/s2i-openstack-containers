@@ -1,0 +1,19 @@
+- imagename: ironic-python-agent
+  elements:
+  # s2i-openstack-containers
+  - ipa-s2i
+  # diskimage-builder elements
+  - dynamic-login
+  - element-manifest
+  # edpm-image-builder elements
+  - interface-names
+  - ironic-agent-multipath
+  # ironic-python-agent-builder elements
+  - extra-hardware
+  - ironic-python-agent-ramdisk
+  min-tmpfs: 7
+  debug-trace: 1
+  checksum: true
+  environment:
+    DIB_PYTHON_VERSION: '3'
+    DIB_DHCP_TIMEOUT: '60'

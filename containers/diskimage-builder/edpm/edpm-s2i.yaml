@@ -1,0 +1,38 @@
+- imagename: edpm-hardened-uefi
+  types: [qcow2]
+  elements:
+  # s2i-openstack-containers
+  - edpm-s2i
+  # diskimage-builder elements
+  - selinux-permissive
+  - stable-interface-names
+  - bootloader
+  - element-manifest
+  - dynamic-login
+  - dracut-regenerate
+  - modprobe
+  - disable-nouveau
+  - reset-bls-entries
+  - cloud-init
+  # edpm-image-builder elements
+  - edpm-base
+  - edpm-partition-uefi
+  - enable-packages-install
+  - interface-names
+  - openvswitch
+  - override-pip-and-virtualenv
+  - cloud-init-network-renderer
+  - remove-resolvconf
+  min-tmpfs: 7
+  debug-trace: 1
+  checksum: true
+  environment:
+    DIB_RELEASE: '10-stream'
+    DIB_PYTHON_VERSION: '3'
+    DIB_DHCP_TIMEOUT: '60'
+    DIB_IMAGE_SIZE: '7'
+    DIB_BLOCK_DEVICE_CONFIG: 'file://dib/edpm-partition-uefi/block-device-default-el10.yaml'
+    DIB_MODPROBE_BLACKLIST: 'usb-storage cramfs freevxfs jffs2 hfs hfsplus squashfs udf bluetooth'
+    DIB_BOOTLOADER_DEFAULT_CMDLINE: 'rd.multipath=default'
+    DIB_BOOTLOADER_VIRTUAL_TERMINAL: ''
+    DIB_BOOTLOADER_USE_SERIAL_CONSOLE: 'False'

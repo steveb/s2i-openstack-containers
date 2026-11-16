@@ -7,8 +7,8 @@ FROM ${BASE_IMAGE} as os_source
 LABEL summary="IPA OS image content" \
       io.k8s.description="Container image providing filesystem content for ironic-python-agent ramdisk image builds"
 
-# Use dnf for package installs and preserve the dnf cache for the later
-# diskimage-builder run
+# dnf is needed for the package installs below and is part of the image so
+# that diskimage-builder can install packages inside the chroot.
 RUN microdnf -y install dnf && microdnf clean all
 
 # Swap packages listed in swapdeps.txt (format: old-package new-package)
@@ -25,10 +25,29 @@ RUN while IFS= read -r line; do \
     rm /tmp/swapdeps.txt
 
 COPY ironic-python-agent/bindeps.txt /tmp/bindeps.txt
-# dnf cache must be full for diskimage-builder run
-# hadolint ignore=DL3040
+# The dnf cache is not needed after this: diskimage-builder uses its own
+# cache directory and the local repository built below.
 RUN pkgs=$(cat /tmp/bindeps.txt | grep -v '^#' | grep -v '^$' | tr '\n' ' ') && \
     if [ -n "${pkgs}" ]; then dnf -y install ${pkgs}; fi && \
+    dnf clean all
+
+# Collect the RPMs behind the pre-installed package set into a local
+# repository that is shipped inside the os_source tarball. The image keeps
+# the packages installed above; the repository only exists so that package
+# requests made by diskimage-builder elements inside the build appliance can
+# be resolved offline instead of failing an "already installed" assertion.
+#
+# --alldeps pulls the whole dependency closure, including dependencies that
+# are already installed, so the repository can satisfy element requests for
+# packages that bindeps.txt only pulls in transitively.
+RUN microdnf -y install dnf-plugins-core createrepo_c && \
+    pkgs=$(cat /tmp/bindeps.txt | grep -v '^#' | grep -v '^$' | tr '\n' ' ') && \
+    dnf -y download --resolve --alldeps --destdir=/var/cache/ipa-repo ${pkgs} && \
+    createrepo_c --quiet /var/cache/ipa-repo && \
+    du -sh /var/cache/ipa-repo && \
+    dnf -y remove --setopt=clean_requirements_on_remove=False \
+      dnf-plugins-core createrepo_c && \
+    dnf clean all && \
     rm /tmp/bindeps.txt
 
 # Manually copy the kernel and create a placeholder initramfs in /boot/.
@@ -153,6 +172,10 @@ RUN pip3 install --no-cache-dir --prefix=/usr \
 # Create a tarball of the os_source filesystem, excluding paths that are
 # not meaningful for a disk image (container metadata, mount points,
 # transient runtime state, and build artifacts).
+#
+# The local RPM repository is excluded by the /var/cache rule and appended
+# afterwards at its normal path, so that diskimage-builder sees it inside
+# the chroot while the rest of the dnf cache stays out of the image.
 ENV DIB_TARBALL_PATH=/build/os_source.tar
 RUN --mount=from=os_source,src=/,dst=/os_source \
     mkdir -p /build && \
@@ -166,52 +189,100 @@ RUN --mount=from=os_source,src=/,dst=/os_source \
       --exclude='./var/tmp/*' \
       --xattrs --xattrs-include='*' --xattrs-exclude='security.selinux' \
       -C /os_source . && \
-    tar rf ${DIB_TARBALL_PATH} -C /build/gdisk .
+    tar rf ${DIB_TARBALL_PATH} -C /build/gdisk . && \
+    tar rf ${DIB_TARBALL_PATH} \
+      --transform='s|^\.|var/cache/ipa-repo|' \
+      -C /os_source/var/cache/ipa-repo .
 
-ENV DIB_BIND_MOUNTS=1
-ENV DIB_NO_TMPFS=1
-ENV DIB_DEBUG_TRACE=2
+# --- Build appliance stage ---
+# A bootable root filesystem containing diskimage-builder and
+# ironic-python-agent-builder. It is packed into a cpio initramfs and booted
+# by qemu-system-x86_64 in the runner stage below, which gives DIB a real
+# kernel, loop devices and writable pseudo-filesystems instead of the
+# container workarounds previously needed here (placeholder /boot/initramfs,
+# DIB_BIND_MOUNTS, DIB_NO_TMPFS).
+FROM os_source AS guest
 
-# All packages must be installed in the first stage and listed in bindeps.txt
-# ENV DIB_SKIP_GRUB_PACKAGE_INSTALL=True
-# ENV DIB_SKIP_BASE_PACKAGE_INSTALL=1
-ENV DIB_AVOID_PACKAGES_UPDATE=1
-ENV DIB_EPEL_DISABLED=2
-ENV DIB_IPA_HARDWARE_RDO=0
-ENV DIB_IPA_HARDWARE_SYSBENCH=0
-ENV DIB_IPA_HARDWARE_GDISK=0
-ENV DIB_TARBALL_OUTPUT=/build/os_image.tar
+# Install the builder tooling offline from the wheels built above, so the
+# appliance never needs a package repository at run time. The package
+# inventory of the produced image is still the frozen os_source tarball plus
+# bindeps.txt; this only adds build tooling to the appliance.
+COPY --from=build /wheels /wheels
+COPY --from=build /tmp/build-constraints.txt /tmp/build-constraints.txt
+COPY ironic-python-agent/pythondeps.txt /tmp/pythondeps.txt
+RUN pip3 install --no-cache-dir --prefix=/usr \
+      -c /tmp/build-constraints.txt \
+      --find-links=/wheels/pkgs \
+      --find-links=/wheels/deps \
+      /wheels/pkgs/*.whl \
+      -r /tmp/pythondeps.txt && \
+    rm -rf /wheels /tmp/pythondeps.txt /tmp/build-constraints.txt
 
-ENV DISTRO_NAME=centos
-ENV DIB_RELEASE=10-stream
-ENV YUM=dnf
-ENV DIB_IPA_KEEP_RPMDB=1
-
-ENV DIB_DEBUG_TRACE=1
-
-# Point source-repositories at local git checkouts (avoids network clones)
-ENV DIB_REPOLOCATION_ironic_python_agent=/src/ironic-python-agent
-# Skip cloning requirements repo — constraints injected by ipa-s2i element
-ENV DIB_INSTALLTYPE_requirements=package
-# Skip cloning glean repo — installed from pre-built wheel via PIP_FIND_LINKS
-ENV DIB_INSTALLTYPE_glean=package
-
-# Add custom elements path for ipa-s2i element
-ENV ELEMENTS_PATH=/elements
+# Custom elements, the image definition that /init builds, and the pinned
+# source refs used to resolve DIB_REPOREF. The elements from
+# ironic-python-agent-builder and edpm-image-builder are installed with their
+# wheels and are added to ELEMENTS_PATH in guest/ipa-builder.env.
 COPY ironic-python-agent/elements/ /elements/
+COPY ironic-python-agent/ironic-python-agent-s2i.yaml /images/ironic-python-agent-s2i.yaml
+COPY sources.txt /source-versions/project.txt
+COPY ironic-python-agent/sources.txt /source-versions/image.txt
 
-# Build the initramfs
-# TODO: remove DIB_REPOREF workaround when all source changes are in upstream master
-# Shallow clones lack a master branch; point DIB at the pinned commit hash
-# so source-repositories checks out the commit that is already present.
-RUN DIB_REPOREF_ironic_python_agent="$(awk \
-      -v stream="${SOURCE_VERSION_STREAM}" \
-      '$1 == stream && $2 == "ironic-python-agent" { print $5; exit }' \
-      /source-versions/*.txt)" && \
-    export DIB_REPOREF_ironic_python_agent && \
-    ironic-python-agent-builder --output /build/ironic-python-agent ipa-s2i
+# /init runs as PID 1 in the VM and sources /etc/ipa-builder.env
+COPY ironic-python-agent/guest/init /init
+COPY ironic-python-agent/guest/ipa-builder.env /etc/ipa-builder.env
+ARG SOURCE_VERSION_STREAM=master
+RUN chmod 0755 /init && \
+    sed -i "s|^SOURCE_VERSION_STREAM=.*|SOURCE_VERSION_STREAM=${SOURCE_VERSION_STREAM}|" \
+      /etc/ipa-builder.env
 
-# --- Packaging stage: fetch from build and add copy-out script ---
+# Pack the appliance filesystem into an initramfs the kernel can boot
+# directly. -xdev keeps the pseudo-filesystem mounts out of the archive
+# while retaining their (empty) mount point directories; /build, /tmp and
+# the package caches are build-time state. /tmp is recreated by /init.
+RUN mkdir -p /build && \
+    kernel="$(ls -1 /boot/vmlinuz-* | head -n1)" && \
+    cp "${kernel}" /build/ipa-builder.kernel && \
+    cd / && \
+    find . -xdev -path ./build -prune -o \
+      ! \( -path './tmp/*' -o -path './var/cache/*' \
+           -o -path './var/tmp/*' \) -print0 | \
+    cpio --null -o -H newc --owner=0:0 --reproducible 2>/dev/null | \
+    gzip -1 > /build/ipa-builder.initramfs && \
+    ls -lh /build/ipa-builder.kernel /build/ipa-builder.initramfs
+
+# --- VM build stage ---
+# Boot the appliance and build the image definition it was given inside it.
+# The resulting initramfs and kernel are left in /build for the packaging
+# stage.
+FROM build AS runner
+
+WORKDIR /
+COPY --from=guest /build/ipa-builder.kernel /build/ipa-builder.kernel
+COPY --from=guest /build/ipa-builder.initramfs /build/ipa-builder.initramfs
+
+# Build inputs attached to the VM as a read-only virtio disk. These are kept
+# out of the appliance initramfs so that it fits comfortably in guest RAM.
+COPY --from=build /wheels /vmdata/wheels
+COPY --from=build /src /vmdata/src
+COPY --from=build /build/os_source.tar /vmdata/os_source.tar
+COPY --from=build /deps-upper-constraints.txt /vmdata/deps-upper-constraints.txt
+
+COPY run-vm.sh /usr/local/bin/run-vm.sh
+ARG VM_CPUS=4
+ARG VM_MEMORY=4096
+ARG VM_TIMEOUT=5400
+ARG VM_OUT_KB=
+ENV VM_CPUS=${VM_CPUS} \
+    VM_MEMORY=${VM_MEMORY} \
+    VM_TIMEOUT=${VM_TIMEOUT} \
+    VM_OUT_KB=${VM_OUT_KB} \
+    VM_ARTIFACTS="ironic-python-agent.initramfs ironic-python-agent.kernel"
+RUN chmod 0755 /usr/local/bin/run-vm.sh && \
+    VM_KERNEL=/build/ipa-builder.kernel \
+    VM_INITRAMFS=/build/ipa-builder.initramfs \
+    /usr/local/bin/run-vm.sh
+
+# --- Packaging stage: fetch from the VM build and add copy-out script ---
 FROM ${BASE_IMAGE}
 
 WORKDIR /
@@ -226,8 +297,8 @@ ENV DEST_DIR=/target
 ENV CHECKSUM_FILE=${CHECKSUM_FILE}
 
 RUN mkdir -p /build
-COPY --from=build /build/${RAMDISK_FILE} ${SRC_DIR}/
-COPY --from=build /build/${KERNEL_FILE} ${SRC_DIR}/
+COPY --from=runner /build/${RAMDISK_FILE} ${SRC_DIR}/
+COPY --from=runner /build/${KERNEL_FILE} ${SRC_DIR}/
 WORKDIR ${SRC_DIR}
 RUN sha256sum * > ${CHECKSUM_FILE}
 

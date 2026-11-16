@@ -1,0 +1,28 @@
+#!/bin/bash
+# dib-lint: disable=safe_sudo
+# All paths passed to sudo are built from $TMP_MOUNT_PATH below.
+# The os_source image is built from a container base image whose dnf
+# configuration is tuned for building images: no weak dependencies, no
+# documentation and automatic removal of unused dependencies. The produced
+# qcow2 is a normal system, so drop those overrides and leave the
+# distribution defaults in place.
+#
+# This runs after all package installs, so it does not change how the
+# build itself resolves packages.
+
+if [ "${DIB_DEBUG_TRACE:-0}" -gt 0 ]; then
+    set -x
+fi
+set -eu
+set -o pipefail
+
+DNF_CONF="${TMP_MOUNT_PATH}/etc/dnf/dnf.conf"
+
+if [ ! -f "${DNF_CONF}" ]; then
+    echo "No ${DNF_CONF}, nothing to do"
+    exit 0
+fi
+
+for opt in clean_requirements_on_remove exactarch install_weak_deps tsflags; do
+    sudo sed -i "/^${opt}[[:space:]]*=/d" "${DNF_CONF}"
+done

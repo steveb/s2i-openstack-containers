@@ -75,6 +75,58 @@ pre-defined plain-text files, separated by build-time vs. runtime scope. See the
 [developer guide](developer-guide.md#dependency-files) for the full list and
 format.
 
+### Building inside a VM
+
+Most images build entirely in the container build environment. The
+`diskimage-builder` project is the exception: diskimage-builder needs to run as
+a real system, with loop devices, device mapper, mount namespaces and a
+writable `/boot`, which an unprivileged container build cannot provide. It has
+two images:
+
+* `ironic-python-agent` builds the deploy ramdisk and kernel.
+* `edpm` builds `edpm-hardened-uefi.qcow2`, the hardened node operating system
+  image. It is partitioned (GPT with an EFI system partition, a boot partition
+  and an LVM thin pool) and uses the block device configuration that ships with
+  the `edpm-image-builder` wheel.
+
+Each Containerfile builds a small bootable appliance root filesystem
+(diskimage-builder and, depending on the image, `ironic-python-agent-builder` or
+`edpm-image-builder` installed offline from the pre-built wheels), packs it into
+a cpio initramfs, and runs it under `qemu-system-x86_64` using TCG. The
+appliance builds the image definition next to the Containerfile, so each
+artifact is described by the same kind of file as the upstream project uses.
+Elements from `ironic-python-agent-builder` and `edpm-image-builder` (pinned in
+`sources.txt`) are installed with those wheels and added to `ELEMENTS_PATH`, so
+the appliance uses the same elements as the upstream and EDPM image builds. The
+frozen `os_source` tarball is attached as a read-only virtio disk, and the
+resulting artifacts are written to a second disk that the build extracts with
+`debugfs`. This requires no extra capabilities and does not change the package
+inventory, which stays the `os_source` tarball plus `bindeps.txt`.
+
+The boot-and-collect logic lives in `run-vm.sh` at the project root and is not
+specific to a particular image. Any appliance can be used as long as it reads
+its inputs from a read-only disk labelled `dib-data` and publishes `/status`
+and the artifacts named by `VM_ARTIFACTS` on a writable disk labelled
+`dib-out`; those files are copied into the build directory, so the appliance
+decides which artifacts are produced and in what format. The published
+Containerfile stage packages them with `copy_out.sh`, which turns the image into
+a self-extracting container: the artifacts are copied to `/target` when the
+container runs, skipping files whose checksum already matches.
+
+The `os_source` stage also collects the RPMs behind `bindeps.txt`, plus their
+dependency closure, into a local yum repository inside the tarball. The
+`ipa-s2i` and `edpm-s2i` elements make that repository the only one visible
+inside the chroot, so package requests from diskimage-builder elements are
+installed from the frozen package set instead of reaching out to the CentOS,
+RDO and EPEL repositories that the reference builds configure at build time.
+The collected RPMs are removed again before the image is packed.
+
+The guest is CPU-bound under emulation, so the build is slower than a native
+one. `VM_CPUS`, `VM_MEMORY` and `VM_TIMEOUT` can be overridden with build args,
+and passing `--device /dev/kvm` in `BUILD_FLAGS` makes the guest use KVM when
+the build host exposes it. The `edpm` image also needs `VM_OUT_KB`, because the
+guest formats and converts a 7GiB image on its output disk.
+
 ### Source overrides
 
 Patched or replaced dependencies can be placed under `src/overrides/<pkg>/`

@@ -1,0 +1,58 @@
+#!/bin/bash
+# Enable the systemd units an EDPM node expects and mask container-only
+# units.
+#
+# The package set is installed while the os_source container image is
+# built, which does not run the systemd presets a normal installation runs.
+# The same packages installed in a container image also end up with a
+# different set of enabled units (podman sockets, sysupdate timers) than
+# the CentOS Stream GenericCloud based reference image.
+#
+# Elements later in the post-install phase enable their own units
+# (edpm-partition-uefi handles tmp.mount and fstrim.timer, growvols enables
+# growvols.service, cloud-init enables its services), so this script only
+# aligns what comes from the package set and the base image.
+#
+# TODO: reconcile the enabled and masked unit set against a reference
+# edpm-hardened-uefi image when one is available.
+
+if [ "${DIB_DEBUG_TRACE:-0}" -gt 0 ]; then
+    set -x
+fi
+set -eu
+set -o pipefail
+
+enable_unit() {
+    if systemctl cat "$1" > /dev/null 2>&1; then
+        systemctl enable "$1"
+    else
+        echo "Skipping enable of missing unit $1"
+    fi
+}
+
+mask_unit() {
+    if systemctl cat "$1" > /dev/null 2>&1; then
+        systemctl mask "$1"
+    fi
+}
+
+# --- Enable units expected on a deployed EDPM node ---
+
+enable_unit sshd.service
+enable_unit chronyd.service
+enable_unit tuned.service
+enable_unit NetworkManager.service
+enable_unit openvswitch.service
+enable_unit multipathd.service
+enable_unit auditd.service
+enable_unit irqbalance.service
+enable_unit lvm2-monitor.service
+enable_unit crond.service
+enable_unit rsyslog.service
+
+# --- Mask units that only make sense in the container base image ---
+
+mask_unit podman.socket
+mask_unit podman-auto-update.timer
+mask_unit systemd-sysupdate.timer
+mask_unit systemd-sysupdate-reboot.timer
