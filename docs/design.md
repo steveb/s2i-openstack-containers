@@ -75,6 +75,27 @@ pre-defined plain-text files, separated by build-time vs. runtime scope. See the
 [developer guide](developer-guide.md#dependency-files) for the full list and
 format.
 
+### Building inside a VM
+
+Most images build entirely in the container build environment. The
+`diskimage-builder` project is the exception: `ironic-python-agent` needs
+diskimage-builder to run as a real system, with loop devices, mount namespaces
+and a writable `/boot`, which an unprivileged container build cannot provide.
+
+That Containerfile builds a small bootable appliance root filesystem
+(diskimage-builder and ironic-python-agent-builder installed offline from the
+pre-built wheels), packs it into a cpio initramfs, and runs it under
+`qemu-system-x86_64` using TCG. The frozen `os_source` tarball, wheels and
+source checkouts are attached as a read-only virtio disk, and the resulting
+initramfs and kernel are written to a second disk that the build extracts with
+`debugfs`. This requires no extra capabilities and does not change the package
+inventory, which stays the `os_source` tarball plus `bindeps.txt`.
+
+The guest is CPU-bound under emulation, so the build is slower than a native
+one. `VM_CPUS`, `VM_MEMORY` and `VM_TIMEOUT` can be overridden with build args,
+and passing `--device /dev/kvm` in `BUILD_FLAGS` makes the guest use KVM when
+the build host exposes it.
+
 ### Source overrides
 
 Patched or replaced dependencies can be placed under `src/overrides/<pkg>/`
