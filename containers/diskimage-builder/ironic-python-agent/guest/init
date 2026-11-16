@@ -22,6 +22,12 @@ mount_pseudo_fs() {
     mount -t proc proc /proc || return 1
     mount -t sysfs sysfs /sys || return 1
     mountpoint -q /dev || mount -t devtmpfs devtmpfs /dev || return 1
+    # There is no udev/systemd here, so create the /dev/fd links that bash
+    # process substitution (used by disk-image-create) depends on.
+    ln -sfn /proc/self/fd /dev/fd || return 1
+    ln -sfn /proc/self/fd/0 /dev/stdin || return 1
+    ln -sfn /proc/self/fd/1 /dev/stdout || return 1
+    ln -sfn /proc/self/fd/2 /dev/stderr || return 1
     mkdir -p /dev/pts /dev/shm || return 1
     mount -t devpts devpts /dev/pts || return 1
     mount -t tmpfs tmpfs /dev/shm || return 1
