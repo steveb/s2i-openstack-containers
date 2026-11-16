@@ -1,0 +1,74 @@
+#!/bin/bash
+# PID 1 for the diskimage-builder appliance VM.
+#
+# Booted by run-vm.sh with two virtio disks, identified by filesystem label:
+#   ipa-data   read-only ext4 disk with the build inputs
+#              (os_source tarball, wheels, sources, constraints)
+#   ipa-out    read-write ext4 disk where the build output is written
+#
+# The build status is written to /out/status on ipa-out and the VM powers
+# off; the host extracts the output from the disk image with debugfs.
+
+set -uo pipefail
+
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+log() { echo "### $*"; }
+die() { echo "### FATAL: $*" >&2; exit 1; }
+
+mount_pseudo_fs() {
+    mkdir -p /proc /sys /dev /run /tmp || return 1
+    mount -t proc proc /proc || return 1
+    mount -t sysfs sysfs /sys || return 1
+    mountpoint -q /dev || mount -t devtmpfs devtmpfs /dev || return 1
+    mkdir -p /dev/pts /dev/shm || return 1
+    mount -t devpts devpts /dev/pts || return 1
+    mount -t tmpfs tmpfs /dev/shm || return 1
+    mount -t tmpfs tmpfs /run || return 1
+    mount -t tmpfs tmpfs /tmp || return 1
+}
+
+log "starting build appliance"
+mount_pseudo_fs || die "mounting pseudo filesystems"
+
+# virtio and ext4 are modules in the EL kernel and there is no udev here.
+modprobe virtio_pci || die "loading virtio_pci"
+modprobe virtio_blk || die "loading virtio_blk"
+modprobe virtio_rng 2>/dev/null || true
+modprobe ext4 2>/dev/null || true
+
+mkdir -p /data /work
+mount -t ext4 -o ro LABEL=ipa-data /data || die "mounting ipa-data"
+mount -t ext4 LABEL=ipa-out /work || die "mounting ipa-out"
+mkdir -p /work/out
+
+# DIB environment, see guest/ipa-builder.env
+set -a
+# shellcheck source=/dev/null
+. /etc/ipa-builder.env
+set +a
+
+stream="${SOURCE_VERSION_STREAM:-master}"
+DIB_REPOREF_ironic_python_agent="$(awk -v stream="${stream}" \
+    '$1 == stream && $2 == "ironic-python-agent" { print $5; exit }' \
+    /source-versions/*.txt)"
+export DIB_REPOREF_ironic_python_agent
+
+log "building ironic-python-agent at ${DIB_REPOREF_ironic_python_agent}"
+status=0
+ironic-python-agent-builder \
+    --output /work/out/ironic-python-agent ipa-s2i || status=$?
+
+echo "${status}" > /work/out/status
+sync
+umount /work || true
+umount /data || true
+log "build finished with status ${status}"
+
+# systemctl --force falls back to the reboot syscall when no systemd manager
+# is running; sysrq is the fallback if that does not take effect.
+poweroff -f || true
+echo 1 > /proc/sys/kernel/sysrq 2>/dev/null || true
+echo o > /proc/sysrq-trigger 2>/dev/null || true
+sleep 10
