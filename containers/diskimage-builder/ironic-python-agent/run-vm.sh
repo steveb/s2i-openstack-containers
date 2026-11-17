@@ -87,15 +87,21 @@ log "Booting build appliance (${VM_CPUS} vCPU, ${VM_MEMORY}MB, ${accel}, ${QEMU_
 # Stream the guest serial console into the image build log as it happens and
 # keep a copy for the failure diagnostics below. -serial stdio requires that
 # no other character device (such as a graphical display) uses the stdio.
+#
+# The guest is deliberately offline and has no implicit hardware: -nodefaults
+# drops QEMU's default devices and -nic none guarantees there is no network
+# interface, so the build fails if any asset is expected from the network.
 set +e
 timeout "${VM_TIMEOUT}" "${QEMU_BIN}" \
     -M q35 \
+    -nodefaults \
     -accel "${accel}" \
     -cpu "${cpu}" \
     -smp "${VM_CPUS}" \
     -m "${VM_MEMORY}" \
     -display none \
     -no-reboot \
+    -nic none \
     -device virtio-rng-pci \
     -kernel "${KERNEL}" \
     -initrd "${INITRAMFS}" \
