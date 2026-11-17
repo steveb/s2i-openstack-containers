@@ -39,8 +39,11 @@ log "starting build appliance"
 mount_pseudo_fs || die "mounting pseudo filesystems"
 
 # virtio and ext4 are modules in the EL kernel and there is no udev here.
+# loop is needed by DIB's block-device stage, which still attaches a loop
+# device for no-final-image builds unless that stage is skipped.
 modprobe virtio_pci || die "loading virtio_pci"
 modprobe virtio_blk || die "loading virtio_blk"
+modprobe loop || die "loading loop"
 modprobe virtio_rng 2>/dev/null || true
 modprobe ext4 2>/dev/null || true
 
