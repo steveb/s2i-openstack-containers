@@ -219,6 +219,8 @@ RUN pip3 install --no-cache-dir --prefix=/usr \
     rm -rf /wheels /tmp/pythondeps.txt /tmp/build-constraints.txt
 
 # Custom elements and the pinned source refs used to resolve DIB_REPOREF.
+# The elements from edpm-image-builder are installed with its wheel and are
+# added to ELEMENTS_PATH in guest/ipa-builder.env.
 COPY ironic-python-agent/elements/ /elements/
 COPY sources.txt /source-versions/project.txt
 COPY ironic-python-agent/sources.txt /source-versions/image.txt

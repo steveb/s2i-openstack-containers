@@ -85,11 +85,14 @@ and a writable `/boot`, which an unprivileged container build cannot provide.
 That Containerfile builds a small bootable appliance root filesystem
 (diskimage-builder and ironic-python-agent-builder installed offline from the
 pre-built wheels), packs it into a cpio initramfs, and runs it under
-`qemu-system-x86_64` using TCG. The frozen `os_source` tarball, wheels and
-source checkouts are attached as a read-only virtio disk, and the resulting
-initramfs and kernel are written to a second disk that the build extracts with
-`debugfs`. This requires no extra capabilities and does not change the package
-inventory, which stays the `os_source` tarball plus `bindeps.txt`.
+`qemu-system-x86_64` using TCG. Elements from `edpm-image-builder` (pinned in
+`sources.txt`) are installed with that wheel and added to `ELEMENTS_PATH`, so
+the appliance uses the same elements as the EDPM image builds. The frozen
+`os_source` tarball, wheels and source checkouts are attached as a read-only
+virtio disk, and the resulting initramfs and kernel are written to a second
+disk that the build extracts with `debugfs`. This requires no extra
+capabilities and does not change the package inventory, which stays the
+`os_source` tarball plus `bindeps.txt`.
 
 The boot-and-collect logic lives in `run-vm.sh` at the project root and is not
 specific to the IPA appliance. Any appliance can be used as long as it reads
