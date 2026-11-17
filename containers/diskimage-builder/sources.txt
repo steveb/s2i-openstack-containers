@@ -1,2 +1,3 @@
 master upper-constraints https://opendev.org/openstack/requirements.git master 00c74bf3db4f0b1b5ab45f2f5ef20c0940869daa -
 master diskimage-builder https://review.opendev.org/openstack/diskimage-builder refs/changes/96/1007796/4 215888245e6e85cb74cac3879e59fad2b0680386 3.43.1.dev12
+master edpm-image-builder https://github.com/openstack-k8s-operators/edpm-image-builder.git main 929cd8a30707630881bcc5841b1be7625b3a8a45 0.2.1.dev95
