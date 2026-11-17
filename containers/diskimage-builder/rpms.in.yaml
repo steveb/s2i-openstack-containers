@@ -17,11 +17,13 @@ packages:
   - ca-certificates
   - chrony
   - coreutils
+  - createrepo_c
   - curl
   - device-mapper-multipath
   - dhcpcd
   - dmidecode
   - dnf
+  - dnf-plugins-core
   - dosfstools
   - e2fsprogs
   - efibootmgr

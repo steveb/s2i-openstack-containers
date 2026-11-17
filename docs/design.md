@@ -91,6 +91,13 @@ initramfs and kernel are written to a second disk that the build extracts with
 `debugfs`. This requires no extra capabilities and does not change the package
 inventory, which stays the `os_source` tarball plus `bindeps.txt`.
 
+The `os_source` stage also collects the RPMs behind `bindeps.txt`, plus their
+dependency closure, into a local yum repository inside the tarball. The
+`ipa-s2i` element makes that repository the only one visible inside the
+chroot, so package requests from diskimage-builder elements are installed from
+the frozen package set instead of being reduced to assertions. The collected
+RPMs are removed again before the ramdisk is packed.
+
 The guest is CPU-bound under emulation, so the build is slower than a native
 one. `VM_CPUS`, `VM_MEMORY` and `VM_TIMEOUT` can be overridden with build args,
 and passing `--device /dev/kvm` in `BUILD_FLAGS` makes the guest use KVM when

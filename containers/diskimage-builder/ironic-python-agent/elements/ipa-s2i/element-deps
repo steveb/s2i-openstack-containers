@@ -1,4 +1,4 @@
-dnf-assert
+yum
 dynamic-login
 extra-hardware
 redhat-common

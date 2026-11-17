@@ -1,0 +1,22 @@
+#!/bin/bash
+# Undo extra-data.d/05-local-repo: restore the distribution repository
+# configuration and drop the collected RPMs, which are only an input to the
+# build and must not end up in the ramdisk.
+
+if [ "${DIB_DEBUG_TRACE:-0}" -gt 0 ]; then
+    set -x
+fi
+set -eu
+set -o pipefail
+
+REPO_DIR="${DIB_IPA_REPO_DIR:-/var/cache/ipa-repo}"
+TARGET_REPOS_DIR="${TMP_MOUNT_PATH}/etc/yum.repos.d"
+
+if [ -d "${TARGET_REPOS_DIR}.ipa-s2i-orig" ]; then
+    sudo rm -rf "${TARGET_REPOS_DIR}"
+    sudo mv -T "${TARGET_REPOS_DIR}.ipa-s2i-orig" "${TARGET_REPOS_DIR}"
+else
+    sudo rm -f "${TARGET_REPOS_DIR}/ipa-local.repo"
+fi
+
+sudo rm -rf "${TMP_MOUNT_PATH}${REPO_DIR}"

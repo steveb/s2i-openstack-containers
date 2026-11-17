@@ -8,6 +8,13 @@
 #
 # Packages are listed with their RHEL/CentOS package names.
 # Comments indicate the source of each requirement.
+#
+# The os_source build stage installs this list and also collects the RPMs
+# behind it, plus their full dependency closure, into a local repository that
+# ships inside the os_source tarball. During the in-VM diskimage-builder run
+# that repository is the only one visible to dnf, so package requests made by
+# diskimage-builder elements are installed from the frozen package set
+# instead of failing an "already installed" assertion.
 
 # === Disk partitioning and partition table tools ===
 # IPA source: disk_utils.py, disk_partitioner.py, partition_utils.py, hardware.py

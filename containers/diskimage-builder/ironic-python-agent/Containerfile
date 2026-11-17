@@ -7,8 +7,8 @@ FROM ${BASE_IMAGE} as os_source
 LABEL summary="IPA OS image content" \
       io.k8s.description="Container image providing filesystem content for ironic-python-agent ramdisk image builds"
 
-# Use dnf for package installs and preserve the dnf cache for the later
-# diskimage-builder run
+# dnf is needed for the package installs below and is part of the image so
+# that diskimage-builder can install packages inside the chroot.
 RUN microdnf -y install dnf && microdnf clean all
 
 # Swap packages listed in swapdeps.txt (format: old-package new-package)
@@ -25,10 +25,29 @@ RUN while IFS= read -r line; do \
     rm /tmp/swapdeps.txt
 
 COPY ironic-python-agent/bindeps.txt /tmp/bindeps.txt
-# dnf cache must be full for diskimage-builder run
-# hadolint ignore=DL3040
+# The dnf cache is not needed after this: diskimage-builder uses its own
+# cache directory and the local repository built below.
 RUN pkgs=$(cat /tmp/bindeps.txt | grep -v '^#' | grep -v '^$' | tr '\n' ' ') && \
     if [ -n "${pkgs}" ]; then dnf -y install ${pkgs}; fi && \
+    dnf clean all
+
+# Collect the RPMs behind the pre-installed package set into a local
+# repository that is shipped inside the os_source tarball. The image keeps
+# the packages installed above; the repository only exists so that package
+# requests made by diskimage-builder elements inside the build appliance can
+# be resolved offline instead of failing an "already installed" assertion.
+#
+# --alldeps pulls the whole dependency closure, including dependencies that
+# are already installed, so the repository can satisfy element requests for
+# packages that bindeps.txt only pulls in transitively.
+RUN microdnf -y install dnf-plugins-core createrepo_c && \
+    pkgs=$(cat /tmp/bindeps.txt | grep -v '^#' | grep -v '^$' | tr '\n' ' ') && \
+    dnf -y download --resolve --alldeps --destdir=/var/cache/ipa-repo ${pkgs} && \
+    createrepo_c --quiet /var/cache/ipa-repo && \
+    du -sh /var/cache/ipa-repo && \
+    dnf -y remove --setopt=clean_requirements_on_remove=False \
+      dnf-plugins-core createrepo_c && \
+    dnf clean all && \
     rm /tmp/bindeps.txt
 
 # Manually copy the kernel and create a placeholder initramfs in /boot/.
@@ -153,6 +172,10 @@ RUN pip3 install --no-cache-dir --prefix=/usr \
 # Create a tarball of the os_source filesystem, excluding paths that are
 # not meaningful for a disk image (container metadata, mount points,
 # transient runtime state, and build artifacts).
+#
+# The local RPM repository is excluded by the /var/cache rule and appended
+# afterwards at its normal path, so that diskimage-builder sees it inside
+# the chroot while the rest of the dnf cache stays out of the image.
 ENV DIB_TARBALL_PATH=/build/os_source.tar
 RUN --mount=from=os_source,src=/,dst=/os_source \
     mkdir -p /build && \
@@ -166,7 +189,10 @@ RUN --mount=from=os_source,src=/,dst=/os_source \
       --exclude='./var/tmp/*' \
       --xattrs --xattrs-include='*' --xattrs-exclude='security.selinux' \
       -C /os_source . && \
-    tar rf ${DIB_TARBALL_PATH} -C /build/gdisk .
+    tar rf ${DIB_TARBALL_PATH} -C /build/gdisk . && \
+    tar rf ${DIB_TARBALL_PATH} \
+      --transform='s|^\.|var/cache/ipa-repo|' \
+      -C /os_source/var/cache/ipa-repo .
 
 # --- Build appliance stage ---
 # A bootable root filesystem containing diskimage-builder and
