@@ -32,6 +32,7 @@ log() { echo "=== $* ==="; }
 
 dump_console() {
     if [[ -f ${CONSOLE_LOG} ]]; then
+        echo "--- last 500 lines of the guest console (${CONSOLE_LOG}) ---" >&2
         tail -n 500 "${CONSOLE_LOG}" >&2
     fi
 }
@@ -83,6 +84,9 @@ else
 fi
 
 log "Booting build appliance (${VM_CPUS} vCPU, ${VM_MEMORY}MB, ${accel}, ${QEMU_BIN})"
+# Stream the guest serial console into the image build log as it happens and
+# keep a copy for the failure diagnostics below. -serial stdio requires that
+# no other character device (such as a graphical display) uses the stdio.
 set +e
 timeout "${VM_TIMEOUT}" "${QEMU_BIN}" \
     -M q35 \
@@ -96,10 +100,11 @@ timeout "${VM_TIMEOUT}" "${QEMU_BIN}" \
     -kernel "${KERNEL}" \
     -initrd "${INITRAMFS}" \
     -append "console=ttyS0 selinux=0 rdinit=/init panic=1" \
-    -serial "file:${CONSOLE_LOG}" \
+    -serial stdio \
     -drive "file=${DATA_IMG},if=virtio,format=raw,readonly=on" \
-    -drive "file=${OUT_IMG},if=virtio,format=raw,cache=unsafe"
-rc=$?
+    -drive "file=${OUT_IMG},if=virtio,format=raw,cache=unsafe" \
+    2>&1 </dev/null | tee "${CONSOLE_LOG}"
+rc=${PIPESTATUS[0]}
 set -e
 
 if [[ ${rc} -ne 0 ]]; then
