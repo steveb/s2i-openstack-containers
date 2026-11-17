@@ -6,9 +6,9 @@
 #   dib-data   read-only ext4 disk with the build inputs
 #              (os_source tarball, wheels, sources, constraints)
 #   dib-out    read-write ext4 disk where the build publishes /status and
-#              /artifacts.tar for the host to collect
+#              its artifacts for the host to collect
 #
-# The host extracts those two files with debugfs, so no loop devices or mount
+# The host extracts those files with debugfs, so no loop devices or mount
 # privileges are needed outside the VM.
 
 set -uo pipefail
@@ -54,7 +54,6 @@ modprobe ext4 2>/dev/null || true
 mkdir -p /data /work
 mount -t ext4 -o ro LABEL=dib-data /data || die "mounting dib-data"
 mount -t ext4 LABEL=dib-out /work || die "mounting dib-out"
-mkdir -p /work/out
 
 # DIB environment, see guest/ipa-builder.env
 set -a
@@ -71,12 +70,10 @@ export DIB_REPOREF_ironic_python_agent
 log "building ironic-python-agent at ${DIB_REPOREF_ironic_python_agent}"
 status=0
 ironic-python-agent-builder \
-    --output /work/out/ironic-python-agent ipa-s2i || status=$?
-if [[ ${status} -eq 0 ]]; then
-    tar -C /work/out -cf /work/artifacts.tar . || status=$?
-fi
+    --output /work/ironic-python-agent ipa-s2i || status=$?
 
-# run-vm.sh collects /status and /artifacts.tar from the root of this disk.
+# run-vm.sh collects /status and the files named by VM_ARTIFACTS from the
+# root of this disk.
 echo "${status}" > /work/status
 sync
 umount /work || true

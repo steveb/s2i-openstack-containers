@@ -14,11 +14,12 @@
 #   * /dev/vdb is a writable ext4 filesystem labelled $VM_OUT_LABEL, where the
 #     appliance writes:
 #       $VM_STATUS_PATH     the build exit status (0 on success)
-#       $VM_ARTIFACTS_PATH  a tar archive of the files to publish
+#     and the files named by $VM_ARTIFACTS, relative to that filesystem root.
 #   * The appliance powers itself off when it is done.
 #
-# Nothing here is specific to a particular image: the artifacts tar is
-# extracted into $OUTPUT_DIR, so the caller decides what the build produces.
+# Nothing here is specific to a particular image: $VM_ARTIFACTS names the
+# files the appliance publishes, and they are copied into $OUTPUT_DIR, so the
+# caller decides what the build produces.
 #
 # No privileges are required. QEMU uses TCG unless /dev/kvm is available, and
 # the disks are created and read with e2fsprogs (mke2fs -d, debugfs), which
@@ -34,7 +35,7 @@ VM_INITRAMFS=${VM_INITRAMFS:-${BUILD_DIR}/vm.initramfs}
 VM_DATA_LABEL=${VM_DATA_LABEL:-dib-data}
 VM_OUT_LABEL=${VM_OUT_LABEL:-dib-out}
 VM_STATUS_PATH=${VM_STATUS_PATH:-/status}
-VM_ARTIFACTS_PATH=${VM_ARTIFACTS_PATH:-/artifacts.tar}
+VM_ARTIFACTS=${VM_ARTIFACTS:-}
 VM_DATA_IMG=${VM_DATA_IMG:-${BUILD_DIR}/vm-data.img}
 VM_OUT_IMG=${VM_OUT_IMG:-${BUILD_DIR}/vm-out.img}
 VM_OUT_KB=${VM_OUT_KB:-}
@@ -157,10 +158,8 @@ extract_file() {
 }
 
 dump_out_dir() {
-    local dir
-    dir=$(dirname "${VM_ARTIFACTS_PATH}")
-    echo "--- ${dir} in ${VM_OUT_IMG} ---" >&2
-    debugfs -R "ls -l ${dir}" "${VM_OUT_IMG}" 1>&2 || true
+    echo "--- / in ${VM_OUT_IMG} ---" >&2
+    debugfs -R "ls -l /" "${VM_OUT_IMG}" 1>&2 || true
 }
 
 rm -rf "${EXTRACT_DIR}"
@@ -180,16 +179,32 @@ if [[ "${status}" != "0" ]]; then
     exit 1
 fi
 
-if ! extract_file "${VM_ARTIFACTS_PATH}" "${EXTRACT_DIR}/artifacts.tar"; then
-    echo "ERROR: the appliance did not produce ${VM_ARTIFACTS_PATH}" >&2
+if [[ -z ${VM_ARTIFACTS} ]]; then
+    echo "ERROR: VM_ARTIFACTS must list the files the appliance publishes" >&2
     dump_out_dir
-    dump_console
     exit 1
 fi
-tar -C "${OUTPUT_DIR}" -xf "${EXTRACT_DIR}/artifacts.tar"
+
+read -r -a artifacts <<<"${VM_ARTIFACTS}"
+for name in "${artifacts[@]}"; do
+    case "${name}" in
+        /* | *..*)
+            echo "ERROR: invalid artifact path '${name}'" >&2
+            exit 1
+            ;;
+    esac
+    dest="${OUTPUT_DIR}/${name}"
+    mkdir -p "$(dirname "${dest}")"
+    if ! extract_file "/${name}" "${dest}"; then
+        echo "ERROR: the appliance did not produce ${name}" >&2
+        dump_out_dir
+        dump_console
+        exit 1
+    fi
+done
 
 # The disks are large and only needed during this build step.
 rm -rf "${EXTRACT_DIR}"
 rm -f "${VM_DATA_IMG}" "${VM_OUT_IMG}"
 
-log "Build artifacts written to ${OUTPUT_DIR}"
+log "Build artifacts written to ${OUTPUT_DIR}: ${VM_ARTIFACTS}"

@@ -270,7 +270,8 @@ ARG VM_OUT_KB=
 ENV VM_CPUS=${VM_CPUS} \
     VM_MEMORY=${VM_MEMORY} \
     VM_TIMEOUT=${VM_TIMEOUT} \
-    VM_OUT_KB=${VM_OUT_KB}
+    VM_OUT_KB=${VM_OUT_KB} \
+    VM_ARTIFACTS="ironic-python-agent.initramfs ironic-python-agent.kernel"
 RUN chmod 0755 /usr/local/bin/run-vm.sh && \
     VM_KERNEL=/build/ipa-builder.kernel \
     VM_INITRAMFS=/build/ipa-builder.initramfs \
