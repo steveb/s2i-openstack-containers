@@ -112,15 +112,37 @@ fi
 # not do journal recovery itself.
 e2fsck -fy "${OUT_IMG}" >/dev/null 2>&1 || true
 
+# Extract one file from /out in the image. debugfs exits 0 even when its
+# command fails, so verify the destination instead of the exit status; fall
+# back to streaming the file to stdout if "dump" did not produce it.
+extract_file() {
+    local name="$1"
+    local dest="$2"
+
+    rm -f "${dest}"
+    debugfs -R "dump /out/${name} ${dest}" "${OUT_IMG}" >/dev/null 2>&1 || true
+    if [[ -s ${dest} ]]; then
+        return 0
+    fi
+    debugfs -R "cat /out/${name}" "${OUT_IMG}" 2>/dev/null >"${dest}" || true
+    [[ -s ${dest} ]]
+}
+
+dump_out_dir() {
+    echo "--- /out in ${OUT_IMG} ---" >&2
+    debugfs -R "ls -l /out" "${OUT_IMG}" 1>&2 || true
+}
+
 rm -rf "${OUT_DIR}"
 mkdir -p "${OUT_DIR}"
-if ! debugfs -R "rdump /out ${OUT_DIR}" "${OUT_IMG}" >/dev/null; then
-    echo "ERROR: unable to extract the build output from ${OUT_IMG}" >&2
+if ! extract_file status "${OUT_DIR}/status"; then
+    echo "ERROR: could not read the build status from ${OUT_IMG}" >&2
+    dump_out_dir
     dump_console
     exit 1
 fi
 
-status=$(cat "${OUT_DIR}/status" 2>/dev/null || echo "missing")
+status=$(cat "${OUT_DIR}/status")
 if [[ "${status}" != "0" ]]; then
     echo "ERROR: in-VM build failed (status: ${status})" >&2
     dump_console
@@ -129,8 +151,10 @@ fi
 
 for suffix in initramfs kernel; do
     src="${OUT_DIR}/ironic-python-agent.${suffix}"
-    if [[ ! -f "${src}" ]]; then
-        echo "ERROR: ${src} was not produced by the in-VM build" >&2
+    if ! extract_file "ironic-python-agent.${suffix}" "${src}"; then
+        echo "ERROR: ironic-python-agent.${suffix} was not produced by the in-VM build" >&2
+        dump_out_dir
+        dump_console
         exit 1
     fi
     mv "${src}" "${BUILD_DIR}/${IMAGE_NAME}.${suffix}"
