@@ -91,6 +91,13 @@ initramfs and kernel are written to a second disk that the build extracts with
 `debugfs`. This requires no extra capabilities and does not change the package
 inventory, which stays the `os_source` tarball plus `bindeps.txt`.
 
+The boot-and-collect logic lives in `run-vm.sh` at the project root and is not
+specific to the IPA appliance. Any appliance can be used as long as it reads
+its inputs from a read-only disk labelled `dib-data` and publishes `/status`
+and `/artifacts.tar` on a writable disk labelled `dib-out`; the tarball is
+extracted into the build directory, so the appliance decides which artifacts
+are produced and in what format (for example a diskimage-builder qcow2 image).
+
 The `os_source` stage also collects the RPMs behind `bindeps.txt`, plus their
 dependency closure, into a local yum repository inside the tarball. The
 `ipa-s2i` element makes that repository the only one visible inside the

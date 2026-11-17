@@ -262,16 +262,19 @@ COPY --from=build /src /vmdata/src
 COPY --from=build /build/os_source.tar /vmdata/os_source.tar
 COPY --from=build /deps-upper-constraints.txt /vmdata/deps-upper-constraints.txt
 
-COPY ironic-python-agent/run-vm.sh /usr/local/bin/run-vm.sh
-ARG IMAGE_NAME=ironic-python-agent
+COPY run-vm.sh /usr/local/bin/run-vm.sh
 ARG VM_CPUS=4
 ARG VM_MEMORY=4096
 ARG VM_TIMEOUT=5400
-ENV IMAGE_NAME=${IMAGE_NAME} \
-    VM_CPUS=${VM_CPUS} \
+ARG VM_OUT_KB=
+ENV VM_CPUS=${VM_CPUS} \
     VM_MEMORY=${VM_MEMORY} \
-    VM_TIMEOUT=${VM_TIMEOUT}
-RUN chmod 0755 /usr/local/bin/run-vm.sh && /usr/local/bin/run-vm.sh
+    VM_TIMEOUT=${VM_TIMEOUT} \
+    VM_OUT_KB=${VM_OUT_KB}
+RUN chmod 0755 /usr/local/bin/run-vm.sh && \
+    VM_KERNEL=/build/ipa-builder.kernel \
+    VM_INITRAMFS=/build/ipa-builder.initramfs \
+    /usr/local/bin/run-vm.sh
 
 # --- Packaging stage: fetch from the VM build and add copy-out script ---
 FROM ${BASE_IMAGE}
