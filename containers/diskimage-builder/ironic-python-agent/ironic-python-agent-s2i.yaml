@@ -1,17 +1,19 @@
 - imagename: ironic-python-agent
   elements:
-  # ipa-s2i element dependencies, replacing the rhel/centos base element
-  - yum
-  - dynamic-login
-  - extra-hardware
-  - redhat-common
-  - redhat-reset-bls-entries
-  - rpm-distro
-  - source-repositories
-  - systemd-machine-id
-  - tarball
-  - ironic-agent-multipath
-  # s2i build elements
+  # s2i-openstack-containers
   - ipa-s2i
+  # diskimage-builder elements
+  - dynamic-login
+  - element-manifest
+  # edpm-image-builder elements
+  - interface-names
+  - ironic-agent-multipath
+  # ironic-python-agent-builder elements
+  - extra-hardware
   - ironic-python-agent-ramdisk
-  environment: {}
+  min-tmpfs: 7
+  debug-trace: 1
+  checksum: true
+  environment:
+    DIB_PYTHON_VERSION: '3'
+    DIB_DHCP_TIMEOUT: '60'

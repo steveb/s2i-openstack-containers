@@ -85,12 +85,15 @@ and a writable `/boot`, which an unprivileged container build cannot provide.
 That Containerfile builds a small bootable appliance root filesystem
 (diskimage-builder and ironic-python-agent-builder installed offline from the
 pre-built wheels), packs it into a cpio initramfs, and runs it under
-`qemu-system-x86_64` using TCG. Elements from `edpm-image-builder` (pinned in
-`sources.txt`) are installed with that wheel and added to `ELEMENTS_PATH`, so
-the appliance uses the same elements as the EDPM image builds. The frozen
-`os_source` tarball, wheels and source checkouts are attached as a read-only
-virtio disk, and the resulting initramfs and kernel are written to a second
-disk that the build extracts with `debugfs`. This requires no extra
+`qemu-system-x86_64` using TCG. The appliance builds the image definition in
+`ironic-python-agent/ironic-python-agent-s2i.yaml`, so the ramdisk is described
+by the same kind of file as the EDPM images. Elements from
+`ironic-python-agent-builder` and `edpm-image-builder` (pinned in
+`sources.txt`) are installed with those wheels and added to `ELEMENTS_PATH`,
+so the appliance uses the same elements as the upstream and EDPM image builds.
+The frozen `os_source` tarball, wheels and source checkouts are attached as a
+read-only virtio disk, and the resulting initramfs and kernel are written to a
+second disk that the build extracts with `debugfs`. This requires no extra
 capabilities and does not change the package inventory, which stays the
 `os_source` tarball plus `bindeps.txt`.
 

@@ -218,10 +218,12 @@ RUN pip3 install --no-cache-dir --prefix=/usr \
       -r /tmp/pythondeps.txt && \
     rm -rf /wheels /tmp/pythondeps.txt /tmp/build-constraints.txt
 
-# Custom elements and the pinned source refs used to resolve DIB_REPOREF.
-# The elements from edpm-image-builder are installed with its wheel and are
-# added to ELEMENTS_PATH in guest/ipa-builder.env.
+# Custom elements, the image definition that /init builds, and the pinned
+# source refs used to resolve DIB_REPOREF. The elements from
+# ironic-python-agent-builder and edpm-image-builder are installed with their
+# wheels and are added to ELEMENTS_PATH in guest/ipa-builder.env.
 COPY ironic-python-agent/elements/ /elements/
+COPY ironic-python-agent/ironic-python-agent-s2i.yaml /images/ironic-python-agent-s2i.yaml
 COPY sources.txt /source-versions/project.txt
 COPY ironic-python-agent/sources.txt /source-versions/image.txt
 
@@ -249,8 +251,9 @@ RUN mkdir -p /build && \
     ls -lh /build/ipa-builder.kernel /build/ipa-builder.initramfs
 
 # --- VM build stage ---
-# Boot the appliance and run ironic-python-agent-builder inside it. The
-# resulting initramfs and kernel are left in /build for the packaging stage.
+# Boot the appliance and build the image definition it was given inside it.
+# The resulting initramfs and kernel are left in /build for the packaging
+# stage.
 FROM build AS runner
 
 WORKDIR /

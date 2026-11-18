@@ -69,8 +69,13 @@ export DIB_REPOREF_ironic_python_agent
 
 log "building ironic-python-agent at ${DIB_REPOREF_ironic_python_agent}"
 status=0
-ironic-python-agent-builder \
-    --output /work/ironic-python-agent ipa-s2i || status=$?
+# The image definition expands to a disk-image-create invocation and writes
+# the ramdisk and kernel to the current directory, which is the root of the
+# output disk that run-vm.sh collects the artifacts from.
+cd /work || die "changing to /work"
+diskimage-builder /images/ironic-python-agent-s2i.yaml || status=$?
+# Leave the output filesystem so that it can be unmounted cleanly below.
+cd / || true
 
 # run-vm.sh collects /status and the files named by VM_ARTIFACTS from the
 # root of this disk.
