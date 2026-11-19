@@ -1,0 +1,59 @@
+#!/bin/bash
+# dib-lint: disable=safe_sudo
+# All paths passed to sudo are built from $TMP_MOUNT_PATH below.
+# Make the RPM repository collected in the os_source build stage the only
+# repository available inside the chroot.
+#
+# The os_source image already contains the node package set, but
+# diskimage-builder elements still ask the package manager to install their
+# own package lists. Pointing dnf exclusively at the local repository keeps
+# the build offline and lets those requests be satisfied from the frozen
+# package set instead of the CentOS, RDO and EPEL repositories that the
+# reference edpm-image-builder build reaches through its repo-setup element.
+#
+# This script runs OUTSIDE the chroot during the extra-data phase, with
+# $TMP_MOUNT_PATH pointing to the chroot filesystem on the host.
+
+if [ "${DIB_DEBUG_TRACE:-0}" -gt 0 ]; then
+    set -x
+fi
+set -eu
+set -o pipefail
+
+REPO_DIR="${DIB_EDPM_REPO_DIR:-/var/cache/edpm-repo}"
+TARGET_REPOS_DIR="${TMP_MOUNT_PATH}/etc/yum.repos.d"
+
+if [ ! -f "${TMP_MOUNT_PATH}${REPO_DIR}/repodata/repomd.xml" ]; then
+    echo "ERROR: local RPM repository not found at ${REPO_DIR} in the image." >&2
+    echo "The os_source stage must collect the RPMs listed in bindeps.txt" >&2
+    echo "into ${REPO_DIR} and run createrepo_c on them." >&2
+    exit 1
+fi
+
+# Move the distribution repository configuration out of the way. It is
+# restored by cleanup.d/05-restore-yum-repos so that the image keeps its
+# upstream repository configuration without influencing this build.
+if [ -d "${TARGET_REPOS_DIR}" ]; then
+    sudo mv -T "${TARGET_REPOS_DIR}" "${TARGET_REPOS_DIR}.edpm-s2i-orig"
+fi
+sudo mkdir -p "${TARGET_REPOS_DIR}"
+
+# The RPMs are collected from the same repositories that build the
+# os_source image, and the repository configuration used there disables GPG
+# checking as well, so it is not re-enabled for the local copy.
+sudo tee "${TARGET_REPOS_DIR}/edpm-local.repo" > /dev/null << EOF
+[edpm-local]
+name=edpm-hardened-uefi image build packages
+baseurl=file://${REPO_DIR}
+enabled=1
+gpgcheck=0
+EOF
+
+# The edpm-base element requests two packages that are only published in
+# the RDO content repositories, which do not exist for CentOS Stream 10
+# yet. Skip them instead of failing the build; see the TODO in
+# bindeps.txt.
+if [ -d "${TMP_MOUNT_PATH}/tmp" ]; then
+    printf '%s\n' os-net-config openstack-selinux | \
+        sudo tee "${TMP_MOUNT_PATH}/tmp/yum-blacklist" > /dev/null
+fi

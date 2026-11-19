@@ -1,0 +1,91 @@
+#!/bin/bash
+# PID 1 for the edpm-hardened-uefi diskimage-builder appliance VM.
+#
+# Booted by run-vm.sh with two virtio disks, identified by filesystem label
+# (these must match the run-vm.sh defaults):
+#   dib-data   read-only ext4 disk with the build inputs (os_source tarball)
+#   dib-out    read-write ext4 disk where the build publishes /status and
+#              its artifacts for the host to collect
+#
+# The host extracts those files with debugfs, so no loop devices or mount
+# privileges are needed outside the VM.
+
+set -uo pipefail
+
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+log() { echo "### $*"; }
+die() { echo "### FATAL: $*" >&2; exit 1; }
+
+mount_pseudo_fs() {
+    mkdir -p /proc /sys /dev /run /tmp || return 1
+    mount -t proc proc /proc || return 1
+    mount -t sysfs sysfs /sys || return 1
+    mountpoint -q /dev || mount -t devtmpfs devtmpfs /dev || return 1
+    # There is no udev/systemd here, so create the /dev/fd links that bash
+    # process substitution (used by disk-image-create) depends on.
+    ln -sfn /proc/self/fd /dev/fd || return 1
+    ln -sfn /proc/self/fd/0 /dev/stdin || return 1
+    ln -sfn /proc/self/fd/1 /dev/stdout || return 1
+    ln -sfn /proc/self/fd/2 /dev/stderr || return 1
+    mkdir -p /dev/pts /dev/shm || return 1
+    mount -t devpts devpts /dev/pts || return 1
+    mount -t tmpfs tmpfs /dev/shm || return 1
+    mount -t tmpfs tmpfs /run || return 1
+    mount -t tmpfs tmpfs /tmp || return 1
+}
+
+log "starting build appliance"
+mount_pseudo_fs || die "mounting pseudo filesystems"
+
+# virtio and ext4 are modules in the EL kernel and there is no udev here.
+modprobe virtio_pci || die "loading virtio_pci"
+modprobe virtio_blk || die "loading virtio_blk"
+modprobe loop || die "loading loop"
+modprobe virtio_rng 2>/dev/null || true
+
+# Modules needed by the block device layout in
+# edpm-partition-uefi/block-device-default-el10.yaml: an LVM thin pool on
+# top of a GPT partitioned disk, with ext4 and vfat filesystems.
+for mod in dm_mod dm_thin_pool dm_persistent_data dm_snapshot xfs vfat ext4; do
+    modprobe "${mod}" || die "loading ${mod}"
+done
+
+mkdir -p /data /work
+mount -t ext4 -o ro LABEL=dib-data /data || die "mounting dib-data"
+mount -t ext4 LABEL=dib-out /work || die "mounting dib-out"
+
+# DIB environment, see guest/edpm-builder.env
+set -a
+# shellcheck source=/dev/null
+. /etc/edpm-builder.env
+set +a
+
+log "building edpm-hardened-uefi"
+status=0
+# The image definition names its block device configuration as
+# file://dib/edpm-partition-uefi/block-device-default-el10.yaml. That path
+# is relative to the build directory, so expose the installed elements as
+# ./dib and run the build from the root of the output disk, which is where
+# run-vm.sh collects the artifacts from.
+ln -sfn /usr/share/edpm-image-builder/dib /work/dib || die "linking dib elements"
+cd /work || die "changing to /work"
+diskimage-builder /images/edpm-s2i.yaml || status=$?
+# Leave the output filesystem so that it can be unmounted cleanly below.
+cd / || true
+
+# run-vm.sh collects /status and the files named by VM_ARTIFACTS from the
+# root of this disk.
+echo "${status}" > /work/status
+sync
+umount /work || true
+umount /data || true
+log "build finished with status ${status}"
+
+# systemctl --force falls back to the reboot syscall when no systemd manager
+# is running; sysrq is the fallback if that does not take effect.
+poweroff -f || true
+echo 1 > /proc/sys/kernel/sysrq 2>/dev/null || true
+echo o > /proc/sysrq-trigger 2>/dev/null || true
+sleep 10

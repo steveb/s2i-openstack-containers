@@ -1,0 +1,16 @@
+# Additional Python packages for the build appliance.
+#
+# diskimage-builder and edpm-image-builder are installed from the wheels
+# built in the Containerfile. These are the run-time imports and tools they
+# need that the wheels do not pull in themselves.
+
+# Imported by the dracut-regenerate finalise script
+PyYAML
+
+# Used to install the wheels and by elements that create venvs inside the
+# chroot (ensure-venv, override-pip-and-virtualenv). Pin pip to the version
+# used by the ironic-python-agent image so both builds resolve the same
+# appliance toolchain.
+pip==25.1.1
+setuptools==80.10.2
+pbr
