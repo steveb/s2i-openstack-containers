@@ -1,3 +1,3 @@
 # stream  name               repo                                                     branch  pinned-hash
-master    upper-constraints   https://opendev.org/openstack/requirements.git            master  22c7e800bda7e90d83ab215df50a610477e623d0
-master    aodh                https://opendev.org/openstack/aodh.git                    master  c712b95314d3684934b8d7cf1d400cc103c54fdf
+master upper-constraints https://opendev.org/openstack/requirements.git master e92a95f09b70d5212d0690f26a2269d920440532
+master aodh https://opendev.org/openstack/aodh.git master 588b5e696b6103873100b0a4c2ed3acf925d7c5e
